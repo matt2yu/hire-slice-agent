@@ -9,15 +9,43 @@ and both run identical code — the only difference is which transport dispatche
 is what the dashboard uses to label an order `phone` or `web`.
 
 ```mermaid
+%%{init: {'flowchart': {'wrappingWidth': 420, 'nodeSpacing': 55, 'rankSpacing': 55}}}%%
 flowchart TD
-  Phone["Caller<br/>inbound phone number"] <-->|SIP| LK["LiveKit Cloud<br/>STT • TTS • turn detection"]
-  Web["Customer<br/>hire-slice.app"] <-->|WebRTC| LK
-  LK <-->|session| Agent["Voice agent<br/>Python, Claude Sonnet 4.6"]
-  Agent -->|confirm_order, secret key| SB[("Supabase Postgres<br/>orders")]
-  SB -->|realtime, publishable key| Admin["Staff dashboard<br/>/admin"]
-  Pay["Customer<br/>/pay/&lt;code&gt;"] -->|Checkout| Stripe["Stripe<br/>test mode"]
-  Stripe -->|signed webhook, service role| SB
+  Phone["Caller<br/>inbound phone number"]
+  Web["Customer<br/>hire-slice.app"]
+
+  LK["LiveKit Cloud<br/>———————————<br/>STT &nbsp;assemblyai/universal-3-5-pro<br/>TTS &nbsp;fishaudio/s2.1-pro<br/>VAD &nbsp;silero<br/>Turn detection &nbsp;LiveKit TurnDetector<br/>Noise cancellation &nbsp;ai-coustics QUAIL_VF_S"]
+
+  Agent["Voice agent<br/>Python &middot; LiveKit Agents 1.6.10<br/>deployed to LiveKit Cloud"]
+  LLM["Anthropic API<br/>claude-sonnet-4-6"]
+
+  Pay["Customer<br/>/pay/&lt;code&gt;"]
+  Stripe["Stripe API (Test Mode)<br/>hosted Checkout"]
+
+  SB[("Supabase Postgres<br/>orders")]
+  Admin["Staff dashboard<br/>/admin"]
+
+  Phone <-->|SIP| LK
+  Web <-->|WebRTC| LK
+  LK <-->|session| Agent
+  Agent <-->|"every turn &middot; Anthropic API key"| LLM
+
+  Agent -->|"confirm_order &middot; secret key (bypasses RLS)"| SB
+  Pay -->|Checkout| Stripe
+  Stripe -->|"signed webhook &middot; secret key (bypasses RLS)"| SB
+  SB -->|"realtime &middot; publishable key (read-only)"| Admin
 ```
+
+**Reading the keys.** Three distinct secrets, and two of the labels above name the same one:
+
+| Key | Who holds it | What it can do |
+|---|---|---|
+| Supabase **publishable** key | the browser, at `/admin` | `select` only — RLS grants `anon` nothing else. Public by design; it ships in the JS bundle. |
+| Supabase **secret** key (a.k.a. service role) | the agent, and the Stripe webhook route | Everything — it bypasses RLS entirely. Server-side only; note it carries no `NEXT_PUBLIC_` prefix. |
+| Stripe **webhook signing** secret (`whsec_`) | the webhook route | Not an access key. It verifies that an inbound POST genuinely came from Stripe before anything is written. |
+
+`deposit_paid` is the flag that moves money, and it needs *both* of the last two: the secret key to write, and a valid Stripe signature to be trusted. The browser has neither.
+
 
 ## Layout
 
